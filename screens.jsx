@@ -700,9 +700,9 @@ function AddAssetScreen({ onDone }) {
   const set = (k, v) => setForm(f => ({...f, [k]: v}));
 
   async function save() {
-    // Build the asset record based on category
     const base = { category: cat };
     let record;
+
     if (cat === "stocks" || cat === "crypto") {
       if (!tickerSel || !form.qty) { alert("Pick a ticker and enter a quantity."); return; }
       record = {
@@ -735,22 +735,72 @@ function AddAssetScreen({ onDone }) {
       };
     } else {
       if (!form.name || !form.value) { alert("Enter a name and current value."); return; }
+
+      const assetType = cat === "cash" ? (form.assetType || "cash") : "";
+
       record = {
         ...base,
         name: form.name,
-        sub: form.issuer || "",
+        sub: form.issuer || (assetType === "term_deposit" ? "Term Deposit" : ""),
         manual_value: Number(form.value),
+        ...(assetType ? { type: assetType } : {}),
+        ...(form.maturityDate ? { meta: { maturityDate: form.maturityDate } } : {}),
       };
     }
+
     await window.db.addAsset(record);
     onDone && onDone();
   }
 
   const textFields = (
     <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap: 16}}>
-      <div className="field"><label>Name / Description</label><input placeholder="e.g. ING Savings Account" value={form.name||""} onChange={e => set("name", e.target.value)}/></div>
-      <div className="field"><label>Current value</label><input placeholder="0.00" type="number" value={form.value||""} onChange={e => set("value", e.target.value)}/></div>
-      <div className="field"><label>Institution / Issuer</label><input placeholder="Optional" value={form.issuer||""} onChange={e => set("issuer", e.target.value)}/></div>
+      {cat === "cash" && (
+        <>
+          <div className="field">
+            <label>Cash asset type</label>
+            <select value={form.assetType || "cash"} onChange={e => set("assetType", e.target.value)}>
+              <option value="cash">Cash / Savings</option>
+              <option value="term_deposit">Term Deposit</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>{(form.assetType || "cash") === "term_deposit" ? "Bank / Institution" : "Institution / Issuer"}</label>
+            <input
+              placeholder="Optional"
+              value={form.issuer || ""}
+              onChange={e => set("issuer", e.target.value)}
+            />
+          </div>
+        </>
+      )}
+
+      <div className="field">
+        <label>Name / Description</label>
+        <input
+          placeholder={cat === "cash" && (form.assetType || "cash") === "term_deposit" ? "e.g. NAB Bank Guarantee TD" : "e.g. ING Savings Account"}
+          value={form.name||""}
+          onChange={e => set("name", e.target.value)}
+        />
+      </div>
+
+      <div className="field">
+        <label>Current value</label>
+        <input placeholder="0.00" type="number" value={form.value||""} onChange={e => set("value", e.target.value)}/>
+      </div>
+
+      {cat !== "cash" && (
+        <div className="field">
+          <label>Institution / Issuer</label>
+          <input placeholder="Optional" value={form.issuer||""} onChange={e => set("issuer", e.target.value)}/>
+        </div>
+      )}
+
+      {cat === "cash" && (form.assetType || "cash") === "term_deposit" && (
+        <div className="field">
+          <label>Maturity date</label>
+          <input type="date" value={form.maturityDate || ""} onChange={e => set("maturityDate", e.target.value)}/>
+        </div>
+      )}
     </div>
   );
 
@@ -782,6 +832,7 @@ function AddAssetScreen({ onDone }) {
         {(cat === "stocks" || cat === "crypto") && (
           <AddTickerForm kind={cat} onSelectedChange={setTickerSel} form={form} setForm={setForm}/>
         )}
+
         {cat === "property" && (
           <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap: 16}}>
             <div className="field" style={{gridColumn:"1/-1"}}><label>Address</label><input placeholder="Street address, Suburb, State" value={form.name||""} onChange={e => set("name", e.target.value)}/></div>
@@ -795,6 +846,7 @@ function AddAssetScreen({ onDone }) {
             <div className="field"><label>Bathrooms</label><input type="number" placeholder="2" value={form.baths||""} onChange={e => set("baths", e.target.value)}/></div>
           </div>
         )}
+
         {cat === "liability" && (
           <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap: 16}}>
             <div className="field"><label>Name</label><input placeholder="e.g. Home Mortgage" value={form.name||""} onChange={e => set("name", e.target.value)}/></div>
@@ -802,6 +854,7 @@ function AddAssetScreen({ onDone }) {
             <div className="field"><label>Lender</label><input placeholder="Optional" value={form.issuer||""} onChange={e => set("issuer", e.target.value)}/></div>
           </div>
         )}
+
         {!["stocks","crypto","property","liability"].includes(cat) && textFields}
 
         <div style={{display:"flex", gap:10, marginTop:20, justifyContent:"flex-end"}}>
