@@ -555,9 +555,9 @@ window.STRATA_PASSCODE = "";
 window.GOOGLE_CLIENT_ID = "141873180852-qsnl91r14mfrt6n2ql4pepcshugn8vpi.apps.googleusercontent.com";
 // Anthropic API key for the "Analyse allocation" feature.
 // Leave empty to disable. Set a spend cap on the key — see DEPLOY.md.
+// Recommended: use your Cloudflare Worker proxy so the Anthropic key stays server-side
+window.STRATA_AI_ENDPOINT = "https://strata-analyse.mattmina27484.workers.dev";
 window.ANTHROPIC_API_KEY = "";
-// ============================================================================
-
 // Tweak defaults — the host rewrites this block on disk when the user changes values
 window.__TWEAKS = /*EDITMODE-BEGIN*/{
   "dashboardVariant": "categories",
