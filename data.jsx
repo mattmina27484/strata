@@ -61,9 +61,47 @@ function loadAssets() {
   try { return JSON.parse(localStorage.getItem("strata.assets.v1") || "[]"); }
   catch { return []; }
 }
+
 function loadSnapshots() {
   try { return JSON.parse(localStorage.getItem("strata.snapshots.v1") || "[]"); }
   catch { return []; }
+}
+
+function isTermDeposit(rec) {
+  const name = String(rec?.name || "").toLowerCase();
+  const sub = String(rec?.sub || "").toLowerCase();
+  const type = String(rec?.type || rec?.assetType || rec?.asset_type || "").toLowerCase();
+  return (
+    type === "term_deposit" ||
+    type === "term deposit" ||
+    name.includes("term deposit") ||
+    sub.includes("term deposit")
+  );
+}
+
+function getAssetCategory(rec) {
+  // Term deposits should roll up under Cash & Savings
+  if (isTermDeposit(rec)) return "cash";
+  if (rec.category === "liability") return "liability";
+  return rec.category || "cash";
+}
+
+function getAssetSymbol(rec) {
+  if (rec.sym) return rec.sym;
+  if (isTermDeposit(rec)) return "TD";
+  return (rec.name || "?").slice(0, 3).toUpperCase();
+}
+
+function getAssetSubtitle(rec) {
+  if (rec.sub) return rec.sub;
+
+  if (rec.qty) {
+    if (rec.category === "crypto") return `${rec.qty} ${rec.sym || ""}`;
+    return `${rec.sym ? rec.sym + " • " : ""}${rec.qty} sh`;
+  }
+
+  if (isTermDeposit(rec)) return "Term Deposit";
+  return "";
 }
 
 // Convert the localStorage asset shape into the legacy shape the UI expects
@@ -71,16 +109,13 @@ function shapeAsset(rec) {
   const value = rec.live && rec.qty && rec.live_price
     ? rec.qty * rec.live_price
     : (rec.manual_value != null ? Number(rec.manual_value) : 0);
-  const qtyLabel = rec.qty ? (rec.category === "crypto"
-      ? `${rec.qty} ${rec.sym || ""}`
-      : `${rec.sym ? rec.sym + " • " : ""}${rec.qty} sh`)
-    : rec.sub;
+
   return {
     id: rec.id,
-    cat: rec.category === "liability" ? "liability" : rec.category,
-    sym: rec.sym || (rec.name || "?").slice(0, 3).toUpperCase(),
+    cat: getAssetCategory(rec),
+    sym: getAssetSymbol(rec),
     name: rec.name,
-    sub: rec.sub || qtyLabel || "",
+    sub: getAssetSubtitle(rec),
     value,
     qty: rec.qty,
     price: rec.live_price || null,
@@ -95,6 +130,7 @@ function buildSpark(assetId, currentValue, snapshots) {
     .filter(s => s.asset_id === assetId)
     .sort((a, b) => new Date(a.taken_at) - new Date(b.taken_at))
     .map(s => s.value);
+
   if (mine.length === 0) return [currentValue, currentValue];
   mine.push(currentValue);
   return mine;
@@ -103,6 +139,7 @@ function buildSpark(assetId, currentValue, snapshots) {
 function rebuild() {
   const raw = loadAssets();
   const snaps = loadSnapshots();
+
   const ASSETS = raw.map(r => {
     const a = shapeAsset(r);
     a.spark = buildSpark(a.id, a.value, snaps);
@@ -112,34 +149,41 @@ function rebuild() {
   // Category totals
   const catMap = {};
   for (const c of CATEGORIES) catMap[c.id] = { ...c, total: 0, count: 0, change24h: 0 };
+
   for (const a of ASSETS) {
     if (!catMap[a.cat]) continue;
     catMap[a.cat].total += a.value;
     catMap[a.cat].count += 1;
     catMap[a.cat].change24h += (a.change24h || 0) * Math.abs(a.value);
   }
+
   for (const id in catMap) {
-    if (catMap[id].total !== 0) catMap[id].change24h = catMap[id].change24h / Math.abs(catMap[id].total);
+    if (catMap[id].total !== 0) {
+      catMap[id].change24h = catMap[id].change24h / Math.abs(catMap[id].total);
+    }
   }
+
   const CATEGORY_TOTALS = Object.values(catMap);
 
-  const NET_WORTH        = ASSETS.reduce((s, a) => s + a.value, 0);
-  const TOTAL_ASSETS     = ASSETS.filter(a => a.value > 0).reduce((s, a) => s + a.value, 0);
-  const TOTAL_LIABILITIES= ASSETS.filter(a => a.value < 0).reduce((s, a) => s + a.value, 0);
+  const NET_WORTH         = ASSETS.reduce((s, a) => s + a.value, 0);
+  const TOTAL_ASSETS      = ASSETS.filter(a => a.value > 0).reduce((s, a) => s + a.value, 0);
+  const TOTAL_LIABILITIES = ASSETS.filter(a => a.value < 0).reduce((s, a) => s + a.value, 0);
 
   // Net-worth history from aggregated daily snapshots
-  // Sum snapshots grouped by date
   const bucket = {};
   for (const s of snaps) {
     const day = (s.taken_at || "").slice(0, 10);
     if (!day) continue;
     bucket[day] = (bucket[day] || 0) + s.value;
   }
+
   const days = Object.keys(bucket).sort();
+
   const makeRange = (n) => {
     const picked = days.slice(-n);
     return picked.map(d => ({ t: d, v: Math.round(bucket[d]) }));
   };
+
   // Always append a "today" point with current net worth so the chart ends at now
   const appendToday = (arr) => {
     const today = new Date().toISOString().slice(0, 10);
@@ -169,21 +213,30 @@ function rebuild() {
 
   // Publish to window
   Object.assign(window, {
-    ASSETS, CATEGORY_TOTALS, NET_WORTH, TOTAL_ASSETS, TOTAL_LIABILITIES, RANGES,
+    ASSETS,
+    CATEGORY_TOTALS,
+    NET_WORTH,
+    TOTAL_ASSETS,
+    TOTAL_LIABILITIES,
+    RANGES,
   });
+
   // Notify listeners
   window.dispatchEvent(new Event("strata:data-changed"));
 }
 
 // Initial build + rebuild on cross-tab storage changes
 rebuild();
+
 window.addEventListener("storage", (e) => {
   if (e.key && e.key.startsWith("strata.")) rebuild();
 });
 
 // Expose helpers + reference data
 Object.assign(window, {
-  CATEGORIES, CURRENCIES, TICKER,
+  CATEGORIES,
+  CURRENCIES,
+  TICKER,
   makeSeries,
   rebuildData: rebuild,
   PROPERTY_MARKETS: {},  // no mock markets in empty mode
