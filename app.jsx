@@ -41,11 +41,16 @@ function Sidebar({ route, setRoute }) {
       </div>
 
       <div className="nav-group">
+        <div className="nav-group-label">Intelligence</div>
+        <Link id="strata-ai" icon={I.Bolt} label="Strata AI"/>
+        <Link id="news" icon={I.Bell} label="News"/>
+      </div>
+
+      <div className="nav-group">
         <div className="nav-group-label">Overview</div>
         <Link id="dashboard" icon={I.Dashboard} label="Dashboard"/>
         <Link id="history" icon={I.Chart} label="History"/>
         <Link id="allocation" icon={I.Pie} label="Allocation"/>
-        <Link id="strategy" icon={I.Pie} label="Goals & Strategy"/>
       </div>
 
       <div className="nav-group">
@@ -57,38 +62,62 @@ function Sidebar({ route, setRoute }) {
 
       <div className="nav-group">
         <div className="nav-group-label">Account</div>
+        <Link id="profile" icon={I.User || I.Settings} label="Profile"/>
         <Link id="settings" icon={I.Settings} label="Settings"/>
       </div>
 
       <div className="sidebar-footer">
-        <div className="user-chip">
-          <span className="avatar">JM</span>
-          <div>
-            <div className="name">James Miller</div>
-            <div className="meta">Premium</div>
-          </div>
-        </div>
+        <UserChip/>
       </div>
     </aside>
+  );
+}
+
+function UserChip() {
+  const [drive, setDrive] = React.useState(window.drive ? window.drive.state() : {});
+  React.useEffect(() => {
+    if (!window.drive) return;
+    return window.drive.onChange(setDrive);
+  }, []);
+
+  const profile = drive?.profile || null;
+  const initials = profile?.initials || "JM";
+  const name = profile?.name || "James Miller";
+  const email = profile?.email || "Premium";
+
+  return (
+    <div className="user-chip">
+      {profile?.picture
+        ? <img src={profile.picture} alt={name} className="avatar-img"/>
+        : <span className="avatar">{initials}</span>}
+      <div style={{minWidth:0}}>
+        <div className="name" style={{whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{name}</div>
+        <div className="meta" style={{whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{email}</div>
+      </div>
+    </div>
   );
 }
 
 function Topbar({ route, setRoute, state, setState }) {
   const [, tick] = React.useReducer(x => x + 1, 0);
   const [refreshing, setRefreshing] = React.useState(false);
+
   React.useEffect(() => {
     const h = () => tick();
     window.addEventListener("strata:ticker-updated", h);
     return () => window.removeEventListener("strata:ticker-updated", h);
   }, []);
+
   const crumbsFor = (r) => {
+    if (r.id === "strata-ai") return ["Intelligence", "Strata AI"];
+    if (r.id === "news") return ["Intelligence", "News"];
     if (r.id === "dashboard") return ["Overview", "Dashboard"];
     if (r.id === "history") return ["Overview", "History"];
     if (r.id === "allocation") return ["Overview", "Allocation"];
-    if (r.id === "strategy") return ["Overview", "Goals & Strategy"];
     if (r.id === "assets") return r.assetId ? ["Portfolio", "Holdings", (window.ASSETS||[]).find(a => a.id === r.assetId)?.name] : ["Portfolio", "Holdings"];
     if (r.id === "categories") return ["Portfolio", "Categories"];
     if (r.id === "add") return ["Portfolio", "Add asset"];
+    if (r.id === "profile") return ["Account", "Profile"];
     if (r.id === "settings") return ["Account", "Settings"];
     return ["—"];
   };
@@ -117,7 +146,11 @@ function Topbar({ route, setRoute, state, setState }) {
       <button
         className="icon-btn"
         title="Refresh prices"
-        onClick={async () => { setRefreshing(true); try { await window.refreshPrices?.(); } finally { setTimeout(() => setRefreshing(false), 600); } }}
+        onClick={async () => {
+          setRefreshing(true);
+          try { await window.refreshPrices?.(); }
+          finally { setTimeout(() => setRefreshing(false), 600); }
+        }}
         style={refreshing ? {animation: "spin 1s linear infinite"} : {}}
       ><I.Refresh/></button>
       <button className="icon-btn" title="Notifications"><I.Bell/></button>
@@ -136,18 +169,17 @@ function App() {
   const [range, setRange] = React.useState("1Y");
   const [showSplash, setShowSplash] = React.useState(true);
   const [, forceTick] = React.useReducer(x => x + 1, 0);
+
   React.useEffect(() => {
     const h = () => forceTick();
     window.addEventListener("strata:data-changed", h);
     return () => window.removeEventListener("strata:data-changed", h);
   }, []);
 
-  // Apply theme to root
   React.useEffect(() => {
     document.documentElement.setAttribute("data-theme", state.theme);
   }, [state.theme]);
 
-  // Edit mode
   const [editMode, setEditMode] = React.useState(false);
   React.useEffect(() => {
     const onMsg = (e) => {
@@ -162,9 +194,14 @@ function App() {
 
   const openAsset = (id) => setRoute({id: "assets", assetId: id});
   const openCategory = (id) => setRoute({id: "categories", categoryId: id});
-  React.useEffect(() => { window.__APP_NAVIGATE = setRoute; return () => { try { delete window.__APP_NAVIGATE; } catch {} }; }, [setRoute]);
+  React.useEffect(() => {
+    window.__APP_NAVIGATE = setRoute;
+    return () => { try { delete window.__APP_NAVIGATE; } catch {} };
+  }, [setRoute]);
 
   const renderScreen = () => {
+    if (route.id === "strata-ai") return <StrataAIScreen/>;
+    if (route.id === "news") return <NewsScreen/>;
     if (route.id === "dashboard") {
       if (state.dashboardVariant === "categories") return <DashboardCategories range={range} setRange={setRange} onOpenAsset={openAsset} onOpenCategory={openCategory} onAdd={() => setRoute({id:"add"})}/>;
       if (state.dashboardVariant === "story") return <DashboardStory range={range} setRange={setRange} onAdd={() => setRoute({id:"add"})}/>;
@@ -172,13 +209,13 @@ function App() {
     }
     if (route.id === "history") return <HistoryScreen/>;
     if (route.id === "allocation") return <AllocationScreen/>;
-    if (route.id === "strategy") return <StrategyScreen/>;
     if (route.id === "assets") {
       if (route.assetId) return <AssetDetail assetId={route.assetId} onBack={() => setRoute({id: "assets"})}/>;
       return <AssetsScreen onOpenAsset={openAsset} onAdd={() => setRoute({id:"add"})}/>;
     }
     if (route.id === "categories") return <CategoriesScreen onOpenAsset={openAsset} onAdd={() => setRoute({id:"add"})}/>;
     if (route.id === "add") return <AddAssetScreen onDone={() => setRoute({id:"assets"})}/>;
+    if (route.id === "profile") return <ProfileScreen/>;
     if (route.id === "settings") return <SettingsScreen/>;
     return null;
   };
@@ -200,4 +237,3 @@ function App() {
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
-
