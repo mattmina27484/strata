@@ -3,7 +3,7 @@
 
 const TODAY = new Date();
 
-// -- Historical series generator (still used for per-asset spark/chart fallback)
+// -- Historical series generator (kept only as a last-resort fallback) ------
 function makeSeries(points, startVal, endVal, vol = 0.015, seed = 1) {
   const out = [];
   let rng = seed || 1;
@@ -15,14 +15,15 @@ function makeSeries(points, startVal, endVal, vol = 0.015, seed = 1) {
     const target = startVal * Math.pow(drift, i);
     v = v * 0.6 + target * 0.4;
     v *= noise;
-    const d = new Date(TODAY); d.setDate(d.getDate() - (points - 1 - i));
+    const d = new Date(TODAY);
+    d.setDate(d.getDate() - (points - 1 - i));
     out.push({ t: d.toISOString().slice(0, 10), v: Math.round(v) });
   }
-  if (out.length) out[out.length - 1].v = endVal;
+  if (out.length) out[out.length - 1].v = Math.round(endVal || 0);
   return out;
 }
 
-// -- Categories (static reference) --------------------------------------------
+// -- Categories --------------------------------------------------------------
 const CATEGORIES = [
   { id: "stocks",     name: "Stocks & Shares",       color: "var(--cat-stocks)",     live: true  },
   { id: "property",   name: "Real Estate",           color: "var(--cat-property)",   live: "market" },
@@ -38,7 +39,7 @@ const CATEGORIES = [
   { id: "liability",  name: "Liabilities",           color: "var(--cat-liability)",  live: false, negative: true },
 ];
 
-// -- Currencies ----------------------------------------------------------------
+// -- Currencies --------------------------------------------------------------
 const CURRENCIES = {
   AUD: { symbol: "A$", code: "AUD", rate: 1 },
   USD: { symbol: "$",  code: "USD", rate: 0.6712 },
@@ -46,16 +47,12 @@ const CURRENCIES = {
   EUR: { symbol: "€",  code: "EUR", rate: 0.6180 },
 };
 
-// -- Market ticker (static reference display only) ----------------------------
+// -- Market ticker (static reference display only) ---------------------------
 const TICKER = [
   { sym: "ASX 200", val: "8,412.3", chg: "+0.64%", pos: true },
   { sym: "S&P 500", val: "5,982.1", chg: "+0.21%", pos: true },
   { sym: "BTC/AUD", val: "146,220", chg: "+3.12%", pos: true },
 ];
-
-// ============================================================================
-// LIVE DATA — rebuilt whenever the user changes something
-// ============================================================================
 
 function loadAssets() {
   try { return JSON.parse(localStorage.getItem("strata.assets.v1") || "[]"); }
@@ -67,60 +64,31 @@ function loadSnapshots() {
   catch { return []; }
 }
 
-function isTermDeposit(rec) {
-  const name = String(rec?.name || "").toLowerCase();
-  const sub = String(rec?.sub || "").toLowerCase();
-  const type = String(rec?.type || rec?.assetType || rec?.asset_type || "").toLowerCase();
-  return (
-    type === "term_deposit" ||
-    type === "term deposit" ||
-    name.includes("term deposit") ||
-    sub.includes("term deposit")
-  );
-}
-
-function getAssetCategory(rec) {
-  // Term deposits should roll up under Cash & Savings
-  if (isTermDeposit(rec)) return "cash";
-  if (rec.category === "liability") return "liability";
-  return rec.category || "cash";
-}
-
-function getAssetSymbol(rec) {
-  if (rec.sym) return rec.sym;
-  if (isTermDeposit(rec)) return "TD";
-  return (rec.name || "?").slice(0, 3).toUpperCase();
-}
-
-function getAssetSubtitle(rec) {
-  if (rec.sub) return rec.sub;
-
-  if (rec.qty) {
-    if (rec.category === "crypto") return `${rec.qty} ${rec.sym || ""}`;
-    return `${rec.sym ? rec.sym + " • " : ""}${rec.qty} sh`;
-  }
-
-  if (isTermDeposit(rec)) return "Term Deposit";
-  return "";
+function currentAssetValue(rec) {
+  return rec.live && rec.qty && rec.live_price
+    ? Number(rec.qty) * Number(rec.live_price)
+    : (rec.manual_value != null ? Number(rec.manual_value) : 0);
 }
 
 // Convert the localStorage asset shape into the legacy shape the UI expects
 function shapeAsset(rec) {
-  const value = rec.live && rec.qty && rec.live_price
-    ? rec.qty * rec.live_price
-    : (rec.manual_value != null ? Number(rec.manual_value) : 0);
+  const value = currentAssetValue(rec);
+  const qtyLabel = rec.qty ? (rec.category === "crypto"
+      ? `${rec.qty} ${rec.sym || ""}`
+      : `${rec.sym ? rec.sym + " • " : ""}${rec.qty} sh`)
+    : rec.sub;
 
   return {
     id: rec.id,
-    cat: getAssetCategory(rec),
-    sym: getAssetSymbol(rec),
+    cat: rec.category === "liability" ? "liability" : rec.category,
+    sym: rec.sym || (rec.name || "?").slice(0, 3).toUpperCase(),
     name: rec.name,
-    sub: getAssetSubtitle(rec),
+    sub: rec.sub || qtyLabel || "",
     value,
     qty: rec.qty,
     price: rec.live_price || null,
     change24h: rec.change24h || 0,
-    spark: [],           // filled below from snapshots
+    spark: [],
     meta: rec.meta || {},
   };
 }
@@ -129,11 +97,171 @@ function buildSpark(assetId, currentValue, snapshots) {
   const mine = snapshots
     .filter(s => s.asset_id === assetId)
     .sort((a, b) => new Date(a.taken_at) - new Date(b.taken_at))
-    .map(s => s.value);
+    .map(s => ({ t: (s.taken_at || "").slice(0, 10), v: Number(s.value || 0) }));
 
-  if (mine.length === 0) return [currentValue, currentValue];
-  mine.push(currentValue);
-  return mine;
+  const today = new Date().toISOString().slice(0, 10);
+
+  if (!mine.length) return [{ t: today, v: currentValue }, { t: today, v: currentValue }];
+
+  const dedup = [];
+  for (const p of mine) {
+    if (dedup.length && dedup[dedup.length - 1].t === p.t) dedup[dedup.length - 1].v = p.v;
+    else dedup.push(p);
+  }
+
+  if (dedup[dedup.length - 1].t !== today) dedup.push({ t: today, v: currentValue });
+  else dedup[dedup.length - 1].v = currentValue;
+
+  if (dedup.length === 1) dedup.unshift({ ...dedup[0] });
+  return dedup;
+}
+
+function isoDay(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function parseDay(s) {
+  const d = new Date(`${s}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// Build true daily portfolio history by carrying forward the last known value
+// of each asset until the next snapshot/change.
+function buildPortfolioHistory(rawAssets, snapshots) {
+  const today = new Date();
+  const todayDay = isoDay(today);
+
+  const snapsByAsset = new Map();
+  for (const s of snapshots) {
+    const assetId = s.asset_id;
+    const day = (s.taken_at || "").slice(0, 10);
+    if (!assetId || !day) continue;
+    if (!snapsByAsset.has(assetId)) snapsByAsset.set(assetId, new Map());
+    snapsByAsset.get(assetId).set(day, Number(s.value || 0));
+  }
+
+  const allDays = new Set([todayDay]);
+  for (const [, byDay] of snapsByAsset) {
+    for (const day of byDay.keys()) allDays.add(day);
+  }
+
+  if (!allDays.size) {
+    return [{ t: todayDay, v: rawAssets.reduce((s, a) => s + currentAssetValue(a), 0) }];
+  }
+
+  const firstDay = [...allDays].sort()[0];
+  const startDate = parseDay(firstDay) || new Date(today);
+  const endDate = new Date(today);
+
+  const assetSeries = rawAssets.map(rec => {
+    const current = currentAssetValue(rec);
+    const byDay = snapsByAsset.get(rec.id) || new Map();
+    return { id: rec.id, current, byDay };
+  });
+
+  const out = [];
+  let cursor = new Date(startDate);
+
+  while (cursor <= endDate) {
+    const day = isoDay(cursor);
+    let total = 0;
+
+    for (const asset of assetSeries) {
+      let valueForDay = asset.current;
+
+      if (asset.byDay.size) {
+        let latestDay = null;
+        let latestVal = null;
+        for (const [d, v] of asset.byDay.entries()) {
+          if (d <= day && (!latestDay || d > latestDay)) {
+            latestDay = d;
+            latestVal = v;
+          }
+        }
+        if (latestDay != null) valueForDay = latestVal;
+      }
+
+      total += Number(valueForDay || 0);
+    }
+
+    out.push({ t: day, v: Math.round(total) });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  if (!out.length) out.push({ t: todayDay, v: assetSeries.reduce((s, a) => s + a.current, 0) });
+
+  // Always force the final point to match the current live net worth.
+  out[out.length - 1].v = Math.round(assetSeries.reduce((s, a) => s + a.current, 0));
+
+  return out;
+}
+
+function sliceRange(history, key) {
+  if (!history.length) return [];
+  const endDay = parseDay(history[history.length - 1].t) || new Date();
+
+  const lookbackDays = {
+    "1D": 1,
+    "1W": 7,
+    "1M": 30,
+    "1YR": 365,
+    "ALL": null,
+  };
+
+  const lookback = lookbackDays[key];
+  if (lookback == null) return history;
+
+  const startDate = new Date(endDay);
+  startDate.setDate(startDate.getDate() - lookback);
+  const startStr = isoDay(startDate);
+
+  let slice = history.filter(p => p.t >= startStr);
+  if (!slice.length) slice = [history[0], history[history.length - 1]];
+
+  // Add one point before the window so the graph has the correct starting value
+  const before = [...history].reverse().find(p => p.t < slice[0].t);
+  if (before) slice = [before, ...slice];
+
+  const dedup = [];
+  for (const p of slice) {
+    if (dedup.length && dedup[dedup.length - 1].t === p.t) dedup[dedup.length - 1] = p;
+    else dedup.push(p);
+  }
+
+  return dedup.length >= 2 ? dedup : [history[0], history[history.length - 1]];
+}
+
+function computeMonthlyStats(history) {
+  if (!history || history.length < 2) {
+    return { bestMonth: null, worstMonth: null, avgMonthlyPct: null };
+  }
+
+  const monthEnd = new Map();
+  for (const p of history) {
+    const month = p.t.slice(0, 7);
+    monthEnd.set(month, p);
+  }
+
+  const months = [...monthEnd.keys()].sort();
+  const returns = [];
+
+  for (let i = 1; i < months.length; i++) {
+    const prev = monthEnd.get(months[i - 1]);
+    const cur = monthEnd.get(months[i]);
+    if (!prev || !cur || !prev.v) continue;
+    const pct = ((cur.v - prev.v) / prev.v) * 100;
+    returns.push({ month: months[i], pct });
+  }
+
+  if (!returns.length) {
+    return { bestMonth: null, worstMonth: null, avgMonthlyPct: null };
+  }
+
+  const bestMonth = returns.reduce((a, b) => (b.pct > a.pct ? b : a));
+  const worstMonth = returns.reduce((a, b) => (b.pct < a.pct ? b : a));
+  const avgMonthlyPct = returns.reduce((s, r) => s + r.pct, 0) / returns.length;
+
+  return { bestMonth, worstMonth, avgMonthlyPct };
 }
 
 function rebuild() {
@@ -165,79 +293,47 @@ function rebuild() {
 
   const CATEGORY_TOTALS = Object.values(catMap);
 
-  const NET_WORTH         = ASSETS.reduce((s, a) => s + a.value, 0);
-  const TOTAL_ASSETS      = ASSETS.filter(a => a.value > 0).reduce((s, a) => s + a.value, 0);
+  const NET_WORTH = ASSETS.reduce((s, a) => s + a.value, 0);
+  const TOTAL_ASSETS = ASSETS.filter(a => a.value > 0).reduce((s, a) => s + a.value, 0);
   const TOTAL_LIABILITIES = ASSETS.filter(a => a.value < 0).reduce((s, a) => s + a.value, 0);
 
-  // Net-worth history from aggregated daily snapshots
-  const bucket = {};
-  for (const s of snaps) {
-    const day = (s.taken_at || "").slice(0, 10);
-    if (!day) continue;
-    bucket[day] = (bucket[day] || 0) + s.value;
-  }
-
-  const days = Object.keys(bucket).sort();
-
-  const makeRange = (n) => {
-    const picked = days.slice(-n);
-    return picked.map(d => ({ t: d, v: Math.round(bucket[d]) }));
-  };
-
-  // Always append a "today" point with current net worth so the chart ends at now
-  const appendToday = (arr) => {
-    const today = new Date().toISOString().slice(0, 10);
-    if (!arr.length || arr[arr.length - 1].t !== today) {
-      arr.push({ t: today, v: Math.round(NET_WORTH) });
-    } else {
-      arr[arr.length - 1].v = Math.round(NET_WORTH);
-    }
-    return arr;
-  };
-
-  // If no history, give a single point so charts render
-  const emptyOrHistory = (n) => {
-    const r = appendToday(makeRange(n));
-    return r.length >= 2 ? r : [{ t: "start", v: NET_WORTH }, { t: "now", v: NET_WORTH }];
-  };
+  const PORTFOLIO_HISTORY = buildPortfolioHistory(raw, snaps);
 
   const RANGES = {
-    "1D":  emptyOrHistory(2),
-    "1W":  emptyOrHistory(7),
-    "1M":  emptyOrHistory(30),
-    "3M":  emptyOrHistory(90),
-    "1Y":  emptyOrHistory(365),
-    "5Y":  emptyOrHistory(365 * 5),
-    "ALL": emptyOrHistory(100000),
+    "1D": sliceRange(PORTFOLIO_HISTORY, "1D"),
+    "1W": sliceRange(PORTFOLIO_HISTORY, "1W"),
+    "1M": sliceRange(PORTFOLIO_HISTORY, "1M"),
+    "1YR": sliceRange(PORTFOLIO_HISTORY, "1YR"),
+    "ALL": sliceRange(PORTFOLIO_HISTORY, "ALL"),
   };
 
-  // Publish to window
+  const HISTORY_STATS = computeMonthlyStats(PORTFOLIO_HISTORY);
+
   Object.assign(window, {
     ASSETS,
     CATEGORY_TOTALS,
     NET_WORTH,
     TOTAL_ASSETS,
     TOTAL_LIABILITIES,
+    PORTFOLIO_HISTORY,
     RANGES,
+    HISTORY_STATS,
   });
 
-  // Notify listeners
   window.dispatchEvent(new Event("strata:data-changed"));
 }
 
-// Initial build + rebuild on cross-tab storage changes
 rebuild();
 
 window.addEventListener("storage", (e) => {
   if (e.key && e.key.startsWith("strata.")) rebuild();
 });
 
-// Expose helpers + reference data
 Object.assign(window, {
   CATEGORIES,
   CURRENCIES,
   TICKER,
   makeSeries,
   rebuildData: rebuild,
-  PROPERTY_MARKETS: {},  // no mock markets in empty mode
+  PROPERTY_MARKETS: {},
 });
