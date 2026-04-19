@@ -1,6 +1,6 @@
 /* Strata AI — chat screen.
    Personal wealth advisor powered by Claude.
-   System prompt + portfolio + profile are injected on every turn.
+   System prompt + portfolio + profile + goals are injected on every turn.
    Conversation history persists in localStorage. */
 
 (function() {
@@ -64,9 +64,11 @@ function buildSystemPrompt() {
   }).join("\n");
 
   const profileCtx = (window.profileSummary && window.profileSummary()) || "";
+  const goalsCtx = (window.goalsAI && window.goalsAI.buildGoalsContext && window.goalsAI.buildGoalsContext()) || "";
+  const toolInstr = (window.goalsAI && window.goalsAI.TOOL_INSTRUCTIONS) || "";
   const today = new Date().toISOString().slice(0, 10);
 
-  return `You are Strata AI — a personal wealth advisor built into the user's net worth tracking app. You have direct access to their portfolio and profile. Your job is to help them understand, improve, and grow their wealth.
+  return `You are Strata AI — a personal wealth advisor built into the user's net worth tracking app. You have direct access to their portfolio, profile, and goals. Your job is to help them understand, improve, and grow their wealth.
 
 # Today's date
 ${today}
@@ -81,8 +83,14 @@ ${byCat || "(No assets added yet.)"}
 
 ${profileCtx ? `# About the user\n${profileCtx}\n` : "# About the user\n(No profile filled in yet — gently suggest they complete their Profile for better advice.)\n"}
 
+${goalsCtx ? `${goalsCtx}\n` : "# The user's goals\n(No goals saved yet.)\n"}
+
+${toolInstr}
+
 # How to behave
-- Be **specific** and **personal** — reference their actual numbers, category names, holdings, age, goals. Generic advice is useless.
+- Be **specific** and **personal** — reference their actual numbers, category names, holdings, age, profile, and goals. Generic advice is useless.
+- If goals exist, use them actively when giving recommendations. Prioritise advice based on what best helps the user progress toward those goals.
+- If the user expresses an intention that clearly maps to a financial goal, you should proactively propose creating or updating a goal using a tool_use block.
 - Speak plainly. No jargon without explaining it. Conversational, confident, never preachy.
 - When asked for recommendations, be direct: say what you'd do and why, grounded in their situation.
 - For forecasts, state your assumptions clearly (e.g. "assuming 7% nominal returns and $X/month contributions…") and show the math.
@@ -108,7 +116,6 @@ async function streamChat(messages, onDelta, onDone, onError) {
     messages: messages.map(m => ({ role: m.role, content: m.content })),
   };
 
-  // Route 1: Cloudflare Worker proxy (recommended — key stays server-side)
   if (endpoint && /^https?:\/\//.test(endpoint)) {
     try {
       const r = await fetch(endpoint.replace(/\/$/, "") + "/v1/messages", {
@@ -125,7 +132,6 @@ async function streamChat(messages, onDelta, onDone, onError) {
     }
   }
 
-  // Route 2: direct Anthropic API (personal site with key in page)
   if (apiKey && apiKey.startsWith("sk-")) {
     try {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -147,13 +153,11 @@ async function streamChat(messages, onDelta, onDone, onError) {
     }
   }
 
-  // Route 2: built-in Claude helper (no streaming — one-shot)
   if (window.claude?.complete) {
     try {
       const full = await window.claude.complete({
         messages: [{ role: "user", content: systemPrompt + "\n\n---\n\n" + messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n") }],
       });
-      // simulate streaming for nicer UX
       const words = full.split(/(\s+)/);
       for (const w of words) { onDelta(w); await new Promise(r => setTimeout(r, 12)); }
       onDone();
@@ -163,7 +167,7 @@ async function streamChat(messages, onDelta, onDone, onError) {
     }
   }
 
-  onError(new Error("No API key configured. Add window.ANTHROPIC_API_KEY in index.html."));
+  onError(new Error("No API key configured. Add window.STRATA_AI_ENDPOINT or window.ANTHROPIC_API_KEY in index.html."));
 }
 
 async function consumeSSE(response, onDelta) {
@@ -194,24 +198,23 @@ async function consumeSSE(response, onDelta) {
 
 function renderMarkdown(text) {
   if (!text) return "";
-  // Escape HTML
   let t = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  // Code blocks ``` ```
   t = t.replace(/```([\s\S]*?)```/g, (_, code) => `<pre class="md-code">${code}</pre>`);
-  // Inline code
   t = t.replace(/`([^`\n]+)`/g, '<code class="md-ic">$1</code>');
-  // Headings
   t = t.replace(/^###\s+(.+)$/gm, '<h4 class="md-h">$1</h4>');
   t = t.replace(/^##\s+(.+)$/gm, '<h3 class="md-h">$1</h3>');
   t = t.replace(/^#\s+(.+)$/gm, '<h2 class="md-h">$1</h2>');
-  // Bold / italic
   t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   t = t.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-  // Lists — group consecutive list items
+
   const lines = t.split("\n");
   const out = [];
   let inUL = false, inOL = false;
-  const closeLists = () => { if (inUL) { out.push("</ul>"); inUL = false; } if (inOL) { out.push("</ol>"); inOL = false; } };
+  const closeLists = () => {
+    if (inUL) { out.push("</ul>"); inUL = false; }
+    if (inOL) { out.push("</ol>"); inOL = false; }
+  };
+
   for (const raw of lines) {
     const ul = /^\s*[-*]\s+(.+)$/.exec(raw);
     const ol = /^\s*\d+\.\s+(.+)$/.exec(raw);
@@ -228,7 +231,7 @@ function renderMarkdown(text) {
     }
   }
   closeLists();
-  // Paragraph wrap remaining lines
+
   const joined = out.join("\n");
   const paras = joined.split(/\n{2,}/).map(block => {
     if (/^\s*<(ul|ol|pre|h2|h3|h4)/.test(block)) return block;
@@ -247,6 +250,7 @@ const SUGGESTED_PROMPTS = [
   { title: "Next $10k — where?", body: "If I had $10,000 to invest right now, given my current allocation and goals, where would you put it and why?" },
   { title: "Stress-test my plan", body: "Walk me through how my portfolio would likely behave in a recession, a high-inflation environment, and a prolonged bear market. What would I do in each?" },
   { title: "Explain my biggest holding", body: "Tell me about my single largest holding — what's good about it, what the risks are, and whether I'm over-exposed." },
+  { title: "Check my goals", body: "List every goal currently saved in my app, show progress on each one, and tell me which single goal should be my highest priority right now and why." },
 ];
 
 function StrataAIScreen() {
@@ -265,19 +269,16 @@ function StrataAIScreen() {
 
   const refresh = () => setConvs(window.strataChat.readConvs());
 
-  // Auto-scroll on new content
   React.useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages.length, streamingText]);
 
-  // Auto-focus input
   React.useEffect(() => {
     inputRef.current?.focus();
   }, [activeId]);
 
-  // If a pending message was seeded (e.g. from News "Ask Strata AI"), auto-send it
   React.useEffect(() => {
     const seededConvId = sessionStorage.getItem("strata.ai.autoSend");
     if (!seededConvId) return;
@@ -287,33 +288,35 @@ function StrataAIScreen() {
     if (!conv || !conv.messages.length) return;
     const firstMsg = conv.messages[0];
     if (!firstMsg?.pending) return;
-    // Remove pending flag and send through the normal pipeline as if user just typed it
+
     const cleanedMessages = [{ ...firstMsg, pending: false }];
     window.strataChat.updateConv(seededConvId, { messages: cleanedMessages });
     window.strataChat.setActiveId(seededConvId);
     setActive(seededConvId);
     setConvs(window.strataChat.readConvs());
-    // Trigger assistant reply
+
     setStreaming(true);
     setStreamingText("");
     let accumulated = "";
     abortRef.current = false;
+
     streamChat(
       cleanedMessages,
       (delta) => { if (abortRef.current) return; accumulated += delta; setStreamingText(accumulated); },
       () => {
         const assistantMsg = { id: "m" + Date.now(), role: "assistant", content: accumulated, ts: new Date().toISOString() };
         window.strataChat.updateConv(seededConvId, { messages: [...cleanedMessages, assistantMsg] });
-        setStreamingText(""); setStreaming(false);
+        setStreamingText("");
+        setStreaming(false);
         setConvs(window.strataChat.readConvs());
       },
       (err) => {
         console.error(err);
         setError(err.message || "Something went wrong.");
-        setStreaming(false); setStreamingText("");
+        setStreaming(false);
+        setStreamingText("");
       }
     );
-    // eslint-disable-next-line
   }, []);
 
   function newChat() {
@@ -350,13 +353,13 @@ function StrataAIScreen() {
       setActive(convId);
     }
 
-    // Add user message
     const userMsg = { id: "m" + Date.now(), role: "user", content, ts: new Date().toISOString() };
     const current = window.strataChat.readConvs().find(c => c.id === convId);
     const nextMessages = [...(current?.messages || []), userMsg];
     const title = current?.title === "New chat" || !current?.title
       ? content.slice(0, 50) + (content.length > 50 ? "…" : "")
       : current.title;
+
     window.strataChat.updateConv(convId, { messages: nextMessages, title });
     refresh();
     setInput("");
@@ -393,7 +396,6 @@ function StrataAIScreen() {
   function stop() {
     abortRef.current = true;
     if (streamingText.trim()) {
-      // keep what we got
       const assistantMsg = { id: "m" + Date.now(), role: "assistant", content: streamingText + " [stopped]", ts: new Date().toISOString() };
       const current = window.strataChat.readConvs().find(c => c.id === activeId);
       window.strataChat.updateConv(activeId, { messages: [...(current?.messages || []), assistantMsg] });
@@ -419,7 +421,6 @@ function StrataAIScreen() {
       gridTemplateColumns: "260px 1fr",
       background: "var(--bg)",
     }}>
-      {/* Conversation list sidebar */}
       <div style={{
         borderRight: "1px solid var(--line)",
         background: "var(--bg-1)",
@@ -432,14 +433,17 @@ function StrataAIScreen() {
             <I.Plus/> New chat
           </button>
         </div>
+
         <div style={{flex: 1, overflowY: "auto", padding: "8px 8px 16px"}}>
           {convs.length === 0 && (
             <div style={{padding: "16px 10px", fontSize: 12, color: "var(--ink-3)"}}>
               No conversations yet. Start a new chat.
             </div>
           )}
+
           {convs.map(c => (
-            <div key={c.id}
+            <div
+              key={c.id}
               onClick={() => selectChat(c.id)}
               className="ai-conv-item"
               style={{
@@ -448,7 +452,9 @@ function StrataAIScreen() {
                 borderRadius: 8,
                 cursor: "pointer",
                 background: c.id === activeId ? "var(--bg-3)" : "transparent",
-                display: "flex", alignItems: "center", gap: 8,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
                 transition: "background 120ms",
               }}
               onMouseEnter={e => { if (c.id !== activeId) e.currentTarget.style.background = "var(--bg-2)"; }}
@@ -464,12 +470,18 @@ function StrataAIScreen() {
                   {c.messages.length} msg{c.messages.length === 1 ? "" : "s"}
                 </div>
               </div>
+
               <button
                 className="ai-conv-del"
                 onClick={(e) => delChat(c.id, e)}
                 style={{
-                  opacity: 0, width: 22, height: 22, borderRadius: 6,
-                  color: "var(--ink-3)", display: "grid", placeItems: "center",
+                  opacity: 0,
+                  width: 22,
+                  height: 22,
+                  borderRadius: 6,
+                  color: "var(--ink-3)",
+                  display: "grid",
+                  placeItems: "center",
                   transition: "opacity 120ms, color 120ms, background 120ms",
                 }}
                 title="Delete"
@@ -483,13 +495,13 @@ function StrataAIScreen() {
         </div>
       </div>
 
-      {/* Chat pane */}
       <div style={{display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0}}>
-        {/* Header */}
         <div style={{
           padding: "14px 28px",
           borderBottom: "1px solid var(--line)",
-          display: "flex", alignItems: "center", gap: 12,
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
           background: "var(--bg-1)",
         }}>
           <span style={{
@@ -500,15 +512,13 @@ function StrataAIScreen() {
           <div>
             <div style={{fontFamily:"var(--serif)", fontStyle:"italic", fontSize: 18}}>Strata AI</div>
             <div style={{fontSize: 11, color:"var(--ink-3)", fontFamily:"var(--mono)", letterSpacing:"0.08em", textTransform:"uppercase"}}>
-              Your wealth advisor · knows your portfolio & profile
+              Your wealth advisor · knows your portfolio, profile & goals
             </div>
           </div>
         </div>
 
-        {/* Messages */}
         <div ref={scrollRef} style={{flex: 1, overflowY: "auto", padding: "28px 0"}}>
           <div style={{maxWidth: 760, margin: "0 auto", padding: "0 28px"}}>
-
             {messages.length === 0 && !streaming && (
               <div>
                 <div style={{textAlign:"center", padding: "40px 0 32px"}}>
@@ -523,7 +533,7 @@ function StrataAIScreen() {
                     How can I help with your wealth?
                   </h2>
                   <div style={{color:"var(--ink-3)", fontSize: 14, maxWidth: 440, margin: "0 auto"}}>
-                    I can see your portfolio and profile. Ask me anything about your allocation, goals, risks, or next moves.
+                    I can see your portfolio, profile, and goals. Ask me anything about your allocation, priorities, risks, or next moves.
                   </div>
                 </div>
 
@@ -531,16 +541,20 @@ function StrataAIScreen() {
                   <div style={{
                     margin: "16px 0 24px",
                     padding: "14px 16px",
-                    background: "var(--bg-2)", border: "1px solid var(--line)", borderRadius: 12,
-                    fontSize: 13, color: "var(--ink-2)",
+                    background: "var(--bg-2)",
+                    border: "1px solid var(--line)",
+                    borderRadius: 12,
+                    fontSize: 13,
+                    color: "var(--ink-2)",
                   }}>
-                    <strong style={{color:"var(--ink)"}}>Tip:</strong> You haven't added any assets yet — my advice will be generic until you do. <a href="#" onClick={e => { e.preventDefault(); const btn = document.querySelector('.nav-item'); }} style={{color:"var(--accent)"}}>Add your first asset</a> to get personalised recommendations.
+                    <strong style={{color:"var(--ink)"}}>Tip:</strong> You haven't added any assets yet — my advice will be generic until you do.
                   </div>
                 )}
 
                 <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10}}>
                   {SUGGESTED_PROMPTS.map((p, i) => (
-                    <button key={i}
+                    <button
+                      key={i}
                       onClick={() => send(p.body)}
                       className="suggest-card"
                       style={{
@@ -563,11 +577,12 @@ function StrataAIScreen() {
               </div>
             )}
 
-            {messages.map(m => <ChatMessage key={m.id} msg={m}/>)}
+            {messages.map(m => <ChatMessage key={m.id} msg={m} />)}
 
             {streaming && streamingText && (
-              <ChatMessage msg={{ role: "assistant", content: streamingText }} streaming/>
+              <ChatMessage msg={{ role: "assistant", content: streamingText }} streaming />
             )}
+
             {streaming && !streamingText && (
               <div style={{padding: "16px 0", display:"flex", alignItems:"center", gap: 10, color:"var(--ink-3)", fontSize: 13}}>
                 <span className="ai-dots"><span/><span/><span/></span>
@@ -588,11 +603,9 @@ function StrataAIScreen() {
                 <strong>Error:</strong> {error}
               </div>
             )}
-
           </div>
         </div>
 
-        {/* Composer */}
         <div style={{
           borderTop: "1px solid var(--line)",
           background: "var(--bg-1)",
@@ -600,7 +613,9 @@ function StrataAIScreen() {
         }}>
           <div style={{maxWidth: 760, margin: "0 auto"}}>
             <div style={{
-              display: "flex", alignItems: "flex-end", gap: 8,
+              display: "flex",
+              alignItems: "flex-end",
+              gap: 8,
               background: "var(--bg-2)",
               border: "1px solid var(--line-2)",
               borderRadius: 14,
@@ -612,22 +627,31 @@ function StrataAIScreen() {
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={onInputKey}
-                placeholder={messages.length === 0 ? "Ask about your portfolio, a market concept, your goals…" : "Ask anything…"}
+                placeholder={messages.length === 0 ? "Ask about your portfolio, goals, risks, next moves…" : "Ask anything…"}
                 rows={1}
                 disabled={streaming}
                 style={{
-                  flex: 1, background: "transparent", border: "none", outline: "none",
-                  color: "var(--ink)", fontFamily: "var(--sans)", fontSize: 14,
-                  resize: "none", padding: "6px 0",
-                  maxHeight: 200, lineHeight: 1.5,
+                  flex: 1,
+                  background: "transparent",
+                  border: "none",
+                  outline: "none",
+                  color: "var(--ink)",
+                  fontFamily: "var(--sans)",
+                  fontSize: 14,
+                  resize: "none",
+                  padding: "6px 0",
+                  maxHeight: 200,
+                  lineHeight: 1.5,
                 }}
                 onInput={e => {
                   e.target.style.height = "auto";
                   e.target.style.height = Math.min(200, e.target.scrollHeight) + "px";
                 }}
               />
+
               {streaming ? (
-                <button onClick={stop}
+                <button
+                  onClick={stop}
                   style={{
                     width: 36, height: 36, borderRadius: 10, display: "grid", placeItems: "center",
                     background: "var(--bg-3)", color: "var(--ink)",
@@ -637,7 +661,8 @@ function StrataAIScreen() {
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
                 </button>
               ) : (
-                <button onClick={() => send()}
+                <button
+                  onClick={() => send()}
                   disabled={!input.trim()}
                   style={{
                     width: 36, height: 36, borderRadius: 10, display: "grid", placeItems: "center",
@@ -654,9 +679,13 @@ function StrataAIScreen() {
                 </button>
               )}
             </div>
+
             <div style={{
-              fontSize: 11, color: "var(--ink-4)", fontFamily: "var(--mono)",
-              marginTop: 8, textAlign: "center",
+              fontSize: 11,
+              color: "var(--ink-4)",
+              fontFamily: "var(--mono)",
+              marginTop: 8,
+              textAlign: "center",
             }}>
               Strata AI can make mistakes. Not financial advice — verify important decisions with a qualified advisor.
             </div>
@@ -669,6 +698,7 @@ function StrataAIScreen() {
 
 function ChatMessage({ msg, streaming }) {
   const isUser = msg.role === "user";
+
   if (isUser) {
     return (
       <div style={{display: "flex", justifyContent: "flex-end", margin: "18px 0"}}>
@@ -688,6 +718,10 @@ function ChatMessage({ msg, streaming }) {
       </div>
     );
   }
+
+  const toolCalls = window.goalsAI?.parseToolCalls ? window.goalsAI.parseToolCalls(msg.content) : [];
+  const visibleText = window.goalsAI?.stripToolCalls ? window.goalsAI.stripToolCalls(msg.content) : msg.content;
+
   return (
     <div style={{display: "flex", gap: 12, margin: "22px 0"}}>
       <div style={{
@@ -695,16 +729,27 @@ function ChatMessage({ msg, streaming }) {
         background: "linear-gradient(135deg, var(--accent), color-mix(in oklab, var(--accent) 55%, #9bb8ff))",
         display: "grid", placeItems: "center", color: "var(--bg)",
       }}><I.Bolt/></div>
+
       <div style={{flex: 1, minWidth: 0, paddingTop: 2}}>
-        <div
-          className="ai-md"
-          style={{
-            fontSize: 14,
-            lineHeight: 1.62,
-            color: "var(--ink)",
-          }}
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) + (streaming ? '<span class="ai-cursor">▊</span>' : "") }}
-        />
+        {visibleText?.trim() ? (
+          <div
+            className="ai-md"
+            style={{
+              fontSize: 14,
+              lineHeight: 1.62,
+              color: "var(--ink)",
+            }}
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(visibleText) + (streaming ? '<span class="ai-cursor">▊</span>' : "") }}
+          />
+        ) : null}
+
+        {!streaming && toolCalls.length > 0 && (
+          <div style={{marginTop: visibleText?.trim() ? 14 : 0}}>
+            {toolCalls.map((call, i) => (
+              <ToolProposalCard key={i} call={call} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
