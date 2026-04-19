@@ -7,17 +7,124 @@
 */
 
 (function() {
+  function describeGoalKind(kind) {
+    const map = {
+      networth: "Net worth target",
+      category: "Category target",
+      holdings: "Specific holdings target",
+      liability: "Debt paydown target",
+      emergency: "Emergency fund",
+      freeform: "Free-form goal",
+    };
+    return map[kind] || kind || "Goal";
+  }
+
+  function resolveHoldingNames(goal) {
+    const assets = window.ASSETS || [];
+    const selected = Array.isArray(goal.holdings) ? goal.holdings : [];
+    return selected.map(h => {
+      if (typeof h === "string") {
+        const a = assets.find(x => x.id === h);
+        return a ? `${a.name}${a.sym ? ` (${a.sym})` : ""}` : h;
+      }
+      if (typeof h === "object" && h) {
+        return [h.name, h.sym].filter(Boolean).join(" ").trim();
+      }
+      return "";
+    }).filter(Boolean);
+  }
+
+  function resolveLiabilityName(goal) {
+    if (!goal.liability_id) return "";
+    const a = (window.ASSETS || []).find(x => x.id === goal.liability_id);
+    return a ? a.name : goal.liability_id;
+  }
+
   function buildGoalsContext() {
     const goals = (window.goalsStore?.list(false) || []);
-    if (!goals.length) return "# Goals\n(The user has not set any goals yet. You can suggest goals or offer to create them.)\n";
-    const lines = goals.map(g => {
+    if (!goals.length) {
+      return `# The user's goals
+The user has not set any goals yet.
+You should still help them, but where appropriate you can suggest creating goals with specific target amounts and dates.`;
+    }
+
+    const lines = [];
+    const completed = goals.filter(g => !!g.completed_at).length;
+    const active = goals.length - completed;
+
+    lines.push("# The user's goals");
+    lines.push(`Total goals: ${goals.length}`);
+    lines.push(`Active goals: ${active}`);
+    if (completed) lines.push(`Completed goals: ${completed}`);
+    lines.push("");
+
+    goals.forEach((g, idx) => {
       const p = window.goalsStore.computeProgress(g);
       const pct = (p.pct * 100).toFixed(0);
-      const dateStr = g.target_date ? ` by ${g.target_date}` : "";
-      const cat = g.category ? ` [${g.category}]` : "";
-      return `- (id: ${g.id}) "${g.title}" — ${g.kind}${cat} · ${formatMoney(p.current, { compact: true })} / ${formatMoney(g.target, { compact: true })} (${pct}%)${dateStr} · priority=${g.priority}`;
-    }).join("\n");
-    return `# The user's active goals\n${lines}\n`;
+      const remaining = Math.max(0, (Number(p.target) || 0) - (Number(p.current) || 0));
+      const categoryName = g.category ? (window.getCategory(g.category)?.name || g.category) : "";
+      const holdings = resolveHoldingNames(g);
+      const liabilityName = resolveLiabilityName(g);
+
+      lines.push(`## Goal ${idx + 1}`);
+      lines.push(`ID: ${g.id}`);
+      lines.push(`Title: ${g.title}`);
+      lines.push(`Type: ${describeGoalKind(g.kind)}`);
+      if (g.priority) lines.push(`Priority: ${g.priority}`);
+      if (g.target_date) lines.push(`Target date: ${g.target_date}`);
+      if (g.completed_at) lines.push(`Completed at: ${g.completed_at}`);
+      lines.push(`Target amount: ${formatMoney(Number(p.target) || 0, { compact: true })}`);
+      lines.push(`Current progress: ${formatMoney(Number(p.current) || 0, { compact: true })}`);
+      lines.push(`Progress percent: ${pct}%`);
+      lines.push(`Remaining to target: ${formatMoney(remaining, { compact: true })}`);
+
+      if (g.kind === "category" && categoryName) {
+        lines.push(`Tracked category: ${categoryName}`);
+      }
+
+      if (g.kind === "holdings" && holdings.length) {
+        lines.push(`Tracked holdings: ${holdings.join(", ")}`);
+      }
+
+      if (g.kind === "liability" && liabilityName) {
+        lines.push(`Tracked liability: ${liabilityName}`);
+        if (g.start_balance) {
+          lines.push(`Starting balance: ${formatMoney(Number(g.start_balance) || 0, { compact: true })}`);
+        }
+      }
+
+      if (p.autoTracked) {
+        lines.push(`Auto-tracked component: ${formatMoney(Number(p.autoCurrent) || 0, { compact: true })}`);
+      }
+
+      if (p.manual) {
+        lines.push(`Manual logged contributions: ${formatMoney(Number(p.manual) || 0, { compact: true })}`);
+      }
+
+      const contributions = Array.isArray(g.contributions) ? [...g.contributions] : [];
+      if (contributions.length) {
+        const recent = contributions
+          .sort((a, b) => String(b.date || b.ts || "").localeCompare(String(a.date || a.ts || "")))
+          .slice(0, 3)
+          .map(c => {
+            const amount = formatMoney(Number(c.amount) || 0, { compact: true, showSign: true });
+            const date = c.date || "";
+            const note = c.note ? ` — ${c.note}` : "";
+            return `${date}: ${amount}${note}`;
+          });
+        lines.push(`Recent contributions: ${recent.join(" | ")}`);
+      }
+
+      if (g.notes) {
+        lines.push(`Notes: ${g.notes}`);
+      }
+
+      lines.push("");
+    });
+
+    lines.push("When advising, treat these goals as an important part of the user's decision-making. Reference them explicitly when relevant.");
+
+    return lines.join("\n");
   }
 
   const TOOL_INSTRUCTIONS = `
@@ -60,7 +167,6 @@ You can emit multiple tool_use blocks in one response. Briefly explain WHY above
 
   function executeToolCall(call) {
     const { tool, args } = call;
-
     if (tool === "create_goal") {
       const g = window.goalsStore.create({
         kind: args.kind || "freeform",
@@ -75,7 +181,6 @@ You can emit multiple tool_use blocks in one response. Briefly explain WHY above
       });
       return { ok: true, message: `Created goal "${g.title}"`, goalId: g.id };
     }
-
     if (tool === "edit_goal") {
       const existing = window.goalsStore.get(args.id);
       if (!existing) return { ok: false, message: "Goal not found." };
@@ -87,7 +192,6 @@ You can emit multiple tool_use blocks in one response. Briefly explain WHY above
       window.goalsStore.update(args.id, patch);
       return { ok: true, message: `Updated "${existing.title}"`, goalId: args.id };
     }
-
     if (tool === "log_contribution") {
       const g = window.goalsStore.get(args.id);
       if (!g) return { ok: false, message: "Goal not found." };
@@ -98,14 +202,12 @@ You can emit multiple tool_use blocks in one response. Briefly explain WHY above
       });
       return { ok: true, message: `Logged ${formatMoney(Number(args.amount)||0)} to "${g.title}"`, goalId: args.id };
     }
-
     if (tool === "delete_goal") {
       const g = window.goalsStore.get(args.id);
       if (!g) return { ok: false, message: "Goal not found." };
       window.goalsStore.remove(args.id);
       return { ok: true, message: `Deleted "${g.title}"` };
     }
-
     return { ok: false, message: "Unknown tool: " + tool };
   }
 
@@ -157,6 +259,8 @@ You can emit multiple tool_use blocks in one response. Briefly explain WHY above
     const cats = (window.CATEGORY_TOTALS || []).filter(c => c.count > 0);
     const net = window.NET_WORTH || 0;
     const profile = (window.profileSummary && window.profileSummary()) || "(no profile provided)";
+    const goals = buildGoalsContext();
+
     const prompt = `You are a wealth advisor. Suggest 4 meaningful, specific financial goals tailored to this user. Return STRICT JSON only — an array of goal objects. No prose, no markdown.
 
 User profile:
@@ -166,11 +270,15 @@ Current portfolio:
 - Net worth: ${formatMoney(net)}
 - Categories: ${cats.map(c => `${c.name} ${formatMoney(c.total, {compact: true})}`).join(", ") || "(empty)"}
 
+Existing goals:
+${goals}
+
 Goal object shape:
 { "kind": "networth|category|holdings|liability|emergency|freeform", "title": "short goal title", "target": number, "target_date": "YYYY-MM-DD", "priority": "high|med|low", "category": "stocks|property|retirement|business|crypto|cash|bonds|private|metals|collect|vehicles|null", "notes": "why this matters" }
 
 Rules:
 - Make targets realistic given their current position.
+- Do not duplicate existing goals.
 - Set target_date 1-10 years out depending on goal size.
 - Mix priorities (at least one high, one low).
 - For emergency fund use kind=emergency and category=null.
@@ -206,7 +314,7 @@ Rules:
 /* ---- Tool confirmation card (used inside Strata AI chat) ---- */
 
 function ToolProposalCard({ call, onApplied }) {
-  const [state, setState] = React.useState("pending"); // pending | applied | rejected | error
+  const [state, setState] = React.useState("pending");
   const [result, setResult] = React.useState(null);
   const { tool, args } = call;
 
@@ -242,10 +350,9 @@ function ToolProposalCard({ call, onApplied }) {
     if (g) rows.unshift(["Goal", g.title]);
   }
 
-  const borderColor =
-    state === "applied" ? "var(--up)" :
-    state === "rejected" ? "var(--ink-4)" :
-    state === "error" ? "var(--down)" : "var(--accent)";
+  const borderColor = state === "applied" ? "var(--up)" :
+                      state === "rejected" ? "var(--ink-4)" :
+                      state === "error" ? "var(--down)" : "var(--accent)";
 
   return (
     <div style={{
@@ -265,7 +372,6 @@ function ToolProposalCard({ call, onApplied }) {
         </span>
         <span style={{fontSize: 13, fontWeight: 500}}>{labels[tool] || tool}</span>
       </div>
-
       <div style={{padding: "12px 16px"}}>
         <div style={{display:"grid", gridTemplateColumns:"100px 1fr", gap: "6px 14px", fontSize: 13}}>
           {rows.map(([k, v], i) => (
@@ -275,7 +381,6 @@ function ToolProposalCard({ call, onApplied }) {
             </React.Fragment>
           ))}
         </div>
-
         {state === "pending" && (
           <div style={{display:"flex", gap: 8, marginTop: 14, justifyContent:"flex-end"}}>
             <button className="btn" onClick={reject}>Dismiss</button>
@@ -284,13 +389,11 @@ function ToolProposalCard({ call, onApplied }) {
             </button>
           </div>
         )}
-
         {state === "applied" && result && (
           <div style={{marginTop: 10, fontSize: 12, color:"var(--up)"}}>
             {result.message}
           </div>
         )}
-
         {state === "error" && result && (
           <div style={{marginTop: 10, fontSize: 12, color:"var(--down)"}}>
             {result.message}
