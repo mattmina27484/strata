@@ -191,7 +191,7 @@ function DashboardCategories({ range, setRange, onOpenAsset, onOpenCategory, onA
             <Pill kind={changePct >= 0 ? "up" : "down"} icon={changePct >= 0 ? <I.ArrowUp/> : <I.ArrowDown/>}>
               {formatPct(changePct)} {range}
             </Pill>
-            <RangeTabs value={range} onChange={setRange} ranges={["1W","1M","3M","1Y","5Y"]}/>
+            <RangeTabs value={range} onChange={setRange} ranges={["1D","1W","1M","1YR","ALL"]}/>
           </div>
           <div style={{marginTop: 16}}>
             <LineChart data={series} height={180} showAxis={false} positive={changePct>=0}/>
