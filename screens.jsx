@@ -480,12 +480,25 @@ function AllocationScreen() {
 
 // ===== History screen ========================================================
 function HistoryScreen() {
-  const [range, setRange] = React.useState("5Y");
-  if (!window.ASSETS.length) return <EmptyState title="No history yet" body="Once you add assets, Strata records snapshots whenever values change — the chart builds up from there."/>;
-  const series = window.RANGES[range];
-  const first = series[0].v, last = series[series.length - 1].v;
+  const [range, setRange] = React.useState("ALL");
+
+  if (!window.ASSETS.length) {
+    return <EmptyState title="No history yet" body="Once you add assets, Strata records snapshots whenever values change — the chart builds up from there."/>;
+  }
+
+  const series = window.RANGES[range] || [];
+  const first = series[0]?.v ?? window.NET_WORTH;
+  const last = series[series.length - 1]?.v ?? window.NET_WORTH;
   const change = last - first;
-  const changePct = (change / first) * 100;
+  const changePct = first ? (change / first) * 100 : 0;
+  const stats = window.HISTORY_STATS || {};
+
+  function fmtMonth(ym) {
+    if (!ym) return "—";
+    const [y, m] = ym.split("-");
+    const d = new Date(Number(y), Number(m) - 1, 1);
+    return d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+  }
 
   return (
     <div className="row-gap">
@@ -494,15 +507,19 @@ function HistoryScreen() {
         <div className="big-num" style={{fontSize: 36}}>Growth over time</div>
       </div>
 
-      <Card eyebrow={`${range} performance`} right={<RangeTabs value={range} onChange={setRange}/>}>
+      <Card eyebrow={`${range === "ALL" ? "All time" : range} performance`} right={<RangeTabs value={range} onChange={setRange} ranges={["1D","1W","1M","1YR","ALL"]}/>}>
         <div style={{display:"flex", gap:32, marginBottom:16, flexWrap:"wrap"}}>
           <div>
             <div className="eyebrow">Net change</div>
-            <div className="big-num" style={{fontSize: 34, marginTop: 6, color: change >= 0 ? "var(--up)" : "var(--down)"}}>{change >= 0 ? "+" : "−"}{formatMoney(Math.abs(change), {compact:true})}</div>
+            <div className="big-num" style={{fontSize: 34, marginTop: 6, color: change >= 0 ? "var(--up)" : "var(--down)"}}>
+              {change >= 0 ? "+" : "−"}{formatMoney(Math.abs(change), {compact:true})}
+            </div>
           </div>
           <div>
             <div className="eyebrow">Percent</div>
-            <div className="big-num" style={{fontSize: 34, marginTop: 6, color: changePct >= 0 ? "var(--up)" : "var(--down)"}}>{formatPct(changePct)}</div>
+            <div className="big-num" style={{fontSize: 34, marginTop: 6, color: changePct >= 0 ? "var(--up)" : "var(--down)"}}>
+              {formatPct(changePct)}
+            </div>
           </div>
           <div>
             <div className="eyebrow">Started at</div>
@@ -517,17 +534,35 @@ function HistoryScreen() {
       </Card>
 
       <div className="grid-3">
-        {[
-          {l:"Best month", v:"+14.2%", s:"Oct 2024"},
-          {l:"Worst month", v:"-6.8%", s:"Mar 2023"},
-          {l:"Avg monthly", v:"+1.38%", s:"Over 5 years"},
-        ].map((x, i) => (
-          <Card key={i}>
-            <div className="eyebrow">{x.l}</div>
-            <div className="big-num" style={{fontSize: 28, marginTop: 8}}>{x.v}</div>
-            <div className="muted tt" style={{fontSize:11, marginTop: 4}}>{x.s}</div>
-          </Card>
-        ))}
+        <Card>
+          <div className="eyebrow">Best month</div>
+          <div className="big-num" style={{fontSize: 28, marginTop: 8}}>
+            {stats.bestMonth ? formatPct(stats.bestMonth.pct) : "—"}
+          </div>
+          <div className="muted tt" style={{fontSize:11, marginTop: 4}}>
+            {stats.bestMonth ? fmtMonth(stats.bestMonth.month) : "Not enough data"}
+          </div>
+        </Card>
+
+        <Card>
+          <div className="eyebrow">Worst month</div>
+          <div className="big-num" style={{fontSize: 28, marginTop: 8}}>
+            {stats.worstMonth ? formatPct(stats.worstMonth.pct) : "—"}
+          </div>
+          <div className="muted tt" style={{fontSize:11, marginTop: 4}}>
+            {stats.worstMonth ? fmtMonth(stats.worstMonth.month) : "Not enough data"}
+          </div>
+        </Card>
+
+        <Card>
+          <div className="eyebrow">Avg monthly</div>
+          <div className="big-num" style={{fontSize: 28, marginTop: 8}}>
+            {stats.avgMonthlyPct != null ? formatPct(stats.avgMonthlyPct) : "—"}
+          </div>
+          <div className="muted tt" style={{fontSize:11, marginTop: 4}}>
+            Based on actual month-end snapshots
+          </div>
+        </Card>
       </div>
     </div>
   );
