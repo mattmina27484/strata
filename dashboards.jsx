@@ -82,7 +82,7 @@ function DashboardHero({ range, setRange, onOpenAsset, onAdd }) {
               <span><span className="sw" style={{background: "var(--up)"}}></span>Net worth</span>
               <span className="muted">· updated every 60s</span>
             </div>
-            <RangeTabs value={range} onChange={setRange} />
+            <RangeTabs value={range} onChange={setRange} ranges={["1D","1W","1M","1YR","ALL"]} />
           </div>
           <div style={{marginTop: 8}}>
             <LineChart data={series} height={280} positive={change >= 0} />
