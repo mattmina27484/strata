@@ -41,16 +41,11 @@ function Sidebar({ route, setRoute }) {
       </div>
 
       <div className="nav-group">
-        <div className="nav-group-label">Intelligence</div>
-        <Link id="strata-ai" icon={I.Bolt} label="Strata AI"/>
-        <Link id="news" icon={I.Bell} label="News"/>
-      </div>
-
-      <div className="nav-group">
         <div className="nav-group-label">Overview</div>
         <Link id="dashboard" icon={I.Dashboard} label="Dashboard"/>
         <Link id="history" icon={I.Chart} label="History"/>
         <Link id="allocation" icon={I.Pie} label="Allocation"/>
+        <Link id="strategy" icon={I.Pie} label="Goals & Strategy"/>
       </div>
 
       <div className="nav-group">
@@ -62,46 +57,19 @@ function Sidebar({ route, setRoute }) {
 
       <div className="nav-group">
         <div className="nav-group-label">Account</div>
-        <Link id="profile" icon={I.User || I.Settings} label="Profile"/>
         <Link id="settings" icon={I.Settings} label="Settings"/>
       </div>
 
       <div className="sidebar-footer">
-        <UserChip/>
+        <div className="user-chip">
+          <span className="avatar">JM</span>
+          <div>
+            <div className="name">James Miller</div>
+            <div className="meta">Premium</div>
+          </div>
+        </div>
       </div>
     </aside>
-  );
-}
-
-function UserChip() {
-  const [drive, setDrive] = React.useState(() => window.drive?.state() || {});
-  React.useEffect(() => {
-    if (!window.drive) return;
-    const unsub = window.drive.onChange(setDrive);
-    return () => { try { unsub?.(); } catch {} };
-  }, []);
-  const p = drive.profile;
-  const name = p?.name || "Not signed in";
-  const meta = p?.email || (drive.hasClientId ? "Sign in on Settings" : "Local only");
-  const initials = p?.initials || "—";
-  return (
-    <div className="user-chip" title={p?.email || ""}>
-      {p?.picture ? (
-        <img
-          src={p.picture}
-          alt=""
-          className="avatar"
-          style={{objectFit:"cover"}}
-          onError={(e) => { e.currentTarget.style.display = "none"; }}
-        />
-      ) : (
-        <span className="avatar">{initials}</span>
-      )}
-      <div style={{minWidth: 0, flex: 1}}>
-        <div className="name" style={{overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{name}</div>
-        <div className="meta" style={{overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{meta}</div>
-      </div>
-    </div>
   );
 }
 
@@ -117,12 +85,10 @@ function Topbar({ route, setRoute, state, setState }) {
     if (r.id === "dashboard") return ["Overview", "Dashboard"];
     if (r.id === "history") return ["Overview", "History"];
     if (r.id === "allocation") return ["Overview", "Allocation"];
+    if (r.id === "strategy") return ["Overview", "Goals & Strategy"];
     if (r.id === "assets") return r.assetId ? ["Portfolio", "Holdings", (window.ASSETS||[]).find(a => a.id === r.assetId)?.name] : ["Portfolio", "Holdings"];
     if (r.id === "categories") return ["Portfolio", "Categories"];
     if (r.id === "add") return ["Portfolio", "Add asset"];
-    if (r.id === "strata-ai") return ["Intelligence", "Strata AI"];
-    if (r.id === "news") return ["Intelligence", "News"];
-    if (r.id === "profile") return ["Account", "Profile"];
     if (r.id === "settings") return ["Account", "Settings"];
     return ["—"];
   };
@@ -196,6 +162,7 @@ function App() {
 
   const openAsset = (id) => setRoute({id: "assets", assetId: id});
   const openCategory = (id) => setRoute({id: "categories", categoryId: id});
+  React.useEffect(() => { window.__APP_NAVIGATE = setRoute; return () => { try { delete window.__APP_NAVIGATE; } catch {} }; }, [setRoute]);
 
   const renderScreen = () => {
     if (route.id === "dashboard") {
@@ -205,27 +172,13 @@ function App() {
     }
     if (route.id === "history") return <HistoryScreen/>;
     if (route.id === "allocation") return <AllocationScreen/>;
+    if (route.id === "strategy") return <StrategyScreen/>;
     if (route.id === "assets") {
       if (route.assetId) return <AssetDetail assetId={route.assetId} onBack={() => setRoute({id: "assets"})}/>;
       return <AssetsScreen onOpenAsset={openAsset} onAdd={() => setRoute({id:"add"})}/>;
     }
     if (route.id === "categories") return <CategoriesScreen onOpenAsset={openAsset} onAdd={() => setRoute({id:"add"})}/>;
     if (route.id === "add") return <AddAssetScreen onDone={() => setRoute({id:"assets"})}/>;
-    if (route.id === "strata-ai") return <StrataAIScreen/>;
-    if (route.id === "news") return <NewsScreen onAskAI={(item) => {
-      // Create a fresh conversation seeded with the article context, then navigate.
-      const c = window.strataChat.createConv();
-      const prompt = `I'm reading this article and want your take. How does it relate to my portfolio and what (if anything) should I do?\n\n**${item.title}**\n_${item.sourceName} · ${new Date(item.pubDate).toLocaleDateString()}_\n\n${item.description || ""}\n\n${item.link}`;
-      window.strataChat.updateConv(c.id, {
-        title: item.title.slice(0, 60),
-        messages: [{ id: "m" + Date.now(), role: "user", content: prompt, ts: new Date().toISOString(), pending: true }],
-      });
-      // Strip pending flag — the chat UI will pick up this conv and the user can hit send again OR we auto-send.
-      // Simpler: go to chat and let user hit send. But better UX: pre-seed so it auto-sends on mount.
-      sessionStorage.setItem("strata.ai.autoSend", c.id);
-      setRoute({id: "strata-ai"});
-    }}/>;
-    if (route.id === "profile") return <ProfileScreen/>;
     if (route.id === "settings") return <SettingsScreen/>;
     return null;
   };
@@ -247,3 +200,4 @@ function App() {
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+
