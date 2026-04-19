@@ -83,7 +83,15 @@ function Delta({ value, pct = false, prefix = "" }) {
   return <span className={cls}>{prefix}{formatted}</span>;
 }
 
-function RangeTabs({ value, onChange, ranges = ["1D","1W","1M","3M","1Y","5Y","ALL"] }) {
+function RangeTabs({ value, onChange, ranges = ["1D","1W","1M","1YR","ALL"] }) {
+  const labels = {
+    "1D": "1D",
+    "1W": "1W",
+    "1M": "1M",
+    "1YR": "1YR",
+    "ALL": "All Time",
+  };
+
   return (
     <div className="range-tabs">
       {ranges.map(r => (
@@ -91,7 +99,9 @@ function RangeTabs({ value, onChange, ranges = ["1D","1W","1M","3M","1Y","5Y","A
           key={r}
           className={value === r ? "active" : ""}
           onClick={() => onChange(r)}
-        >{r}</button>
+        >
+          {labels[r] || r}
+        </button>
       ))}
     </div>
   );
