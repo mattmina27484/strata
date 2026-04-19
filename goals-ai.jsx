@@ -60,6 +60,7 @@ You can emit multiple tool_use blocks in one response. Briefly explain WHY above
 
   function executeToolCall(call) {
     const { tool, args } = call;
+
     if (tool === "create_goal") {
       const g = window.goalsStore.create({
         kind: args.kind || "freeform",
@@ -74,6 +75,7 @@ You can emit multiple tool_use blocks in one response. Briefly explain WHY above
       });
       return { ok: true, message: `Created goal "${g.title}"`, goalId: g.id };
     }
+
     if (tool === "edit_goal") {
       const existing = window.goalsStore.get(args.id);
       if (!existing) return { ok: false, message: "Goal not found." };
@@ -85,6 +87,7 @@ You can emit multiple tool_use blocks in one response. Briefly explain WHY above
       window.goalsStore.update(args.id, patch);
       return { ok: true, message: `Updated "${existing.title}"`, goalId: args.id };
     }
+
     if (tool === "log_contribution") {
       const g = window.goalsStore.get(args.id);
       if (!g) return { ok: false, message: "Goal not found." };
@@ -95,18 +98,62 @@ You can emit multiple tool_use blocks in one response. Briefly explain WHY above
       });
       return { ok: true, message: `Logged ${formatMoney(Number(args.amount)||0)} to "${g.title}"`, goalId: args.id };
     }
+
     if (tool === "delete_goal") {
       const g = window.goalsStore.get(args.id);
       if (!g) return { ok: false, message: "Goal not found." };
       window.goalsStore.remove(args.id);
       return { ok: true, message: `Deleted "${g.title}"` };
     }
+
     return { ok: false, message: "Unknown tool: " + tool };
   }
 
-  /* One-shot suggest via built-in claude helper. */
+  async function completeWithStrataAI(prompt) {
+    const endpoint = window.STRATA_AI_ENDPOINT;
+    const apiKey = window.ANTHROPIC_API_KEY;
+
+    const body = {
+      model: "claude-haiku-4-5",
+      max_tokens: 1200,
+      messages: [{ role: "user", content: prompt }],
+    };
+
+    if (endpoint && /^https?:\/\//.test(endpoint)) {
+      const r = await fetch(endpoint.replace(/\/$/, "") + "/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error("Worker " + r.status + ": " + await r.text());
+      const j = await r.json();
+      return (j.content?.[0]?.text) || "";
+    }
+
+    if (apiKey && apiKey.startsWith("sk-")) {
+      const r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error("Anthropic API: " + r.status + " " + await r.text());
+      const j = await r.json();
+      return (j.content?.[0]?.text) || "";
+    }
+
+    if (window.claude?.complete) {
+      return await window.claude.complete(prompt);
+    }
+
+    throw new Error("No AI endpoint configured. Set window.STRATA_AI_ENDPOINT or window.ANTHROPIC_API_KEY in index.html.");
+  }
+
   async function suggestGoals() {
-    if (!window.claude?.complete) throw new Error("Claude helper unavailable.");
     const cats = (window.CATEGORY_TOTALS || []).filter(c => c.count > 0);
     const net = window.NET_WORTH || 0;
     const profile = (window.profileSummary && window.profileSummary()) || "(no profile provided)";
@@ -130,8 +177,9 @@ Rules:
 - For mortgage/debt use kind=liability.
 - Output ONLY the JSON array, starting with [ and ending with ].`;
 
-    const text = await window.claude.complete(prompt);
-    const match = text.match(/\[[\s\S]*\]/);
+    const text = await completeWithStrataAI(prompt);
+    const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+    const match = cleaned.match(/\[[\s\S]*\]/);
     if (!match) throw new Error("Couldn't parse AI response.");
     const arr = JSON.parse(match[0]);
     return arr.map(a => ({
@@ -168,6 +216,7 @@ function ToolProposalCard({ call, onApplied }) {
     setState(r.ok ? "applied" : "error");
     onApplied?.(r);
   };
+
   const reject = () => setState("rejected");
 
   const labels = {
@@ -193,9 +242,10 @@ function ToolProposalCard({ call, onApplied }) {
     if (g) rows.unshift(["Goal", g.title]);
   }
 
-  const borderColor = state === "applied" ? "var(--up)" :
-                      state === "rejected" ? "var(--ink-4)" :
-                      state === "error" ? "var(--down)" : "var(--accent)";
+  const borderColor =
+    state === "applied" ? "var(--up)" :
+    state === "rejected" ? "var(--ink-4)" :
+    state === "error" ? "var(--down)" : "var(--accent)";
 
   return (
     <div style={{
@@ -215,6 +265,7 @@ function ToolProposalCard({ call, onApplied }) {
         </span>
         <span style={{fontSize: 13, fontWeight: 500}}>{labels[tool] || tool}</span>
       </div>
+
       <div style={{padding: "12px 16px"}}>
         <div style={{display:"grid", gridTemplateColumns:"100px 1fr", gap: "6px 14px", fontSize: 13}}>
           {rows.map(([k, v], i) => (
@@ -224,6 +275,7 @@ function ToolProposalCard({ call, onApplied }) {
             </React.Fragment>
           ))}
         </div>
+
         {state === "pending" && (
           <div style={{display:"flex", gap: 8, marginTop: 14, justifyContent:"flex-end"}}>
             <button className="btn" onClick={reject}>Dismiss</button>
@@ -232,11 +284,13 @@ function ToolProposalCard({ call, onApplied }) {
             </button>
           </div>
         )}
+
         {state === "applied" && result && (
           <div style={{marginTop: 10, fontSize: 12, color:"var(--up)"}}>
             {result.message}
           </div>
         )}
+
         {state === "error" && result && (
           <div style={{marginTop: 10, fontSize: 12, color:"var(--down)"}}>
             {result.message}
