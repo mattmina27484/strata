@@ -49,9 +49,10 @@ const CURRENCIES = {
 
 // -- Market ticker ------------------------------------------------------------
 const TICKER = [
-  { sym: "ASX 200", val: "8,412.3", chg: "+0.64%", pos: true },
-  { sym: "S&P 500", val: "5,982.1", chg: "+0.21%", pos: true },
-  { sym: "BTC/AUD", val: "146,220", chg: "+3.12%", pos: true },
+  { sym: "SPY",     val: "518.4",   chg: "+0.21%", pos: true },
+  { sym: "AUD/USD", val: "0.6418",  chg: "-0.08%", pos: false },
+  { sym: "ASX 200", val: "7,812.6", chg: "+0.34%", pos: true },
+  { sym: "BTC/AUD", val: "104,675", chg: "-1.52%", pos: false },
 ];
 
 function loadAssets() {
