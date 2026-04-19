@@ -480,13 +480,17 @@ function AllocationScreen() {
 
 // ===== History screen ========================================================
 function HistoryScreen() {
-  const [range, setRange] = React.useState("ALL");
+  const [range, setRange] = React.useState("5Y");
 
   if (!window.ASSETS.length) {
     return <EmptyState title="No history yet" body="Once you add assets, Strata records snapshots whenever values change — the chart builds up from there."/>;
   }
 
-  const series = window.RANGES[range] || [];
+  const series = window.RANGES[range] || window.RANGES["1M"] || [];
+  if (!series.length) {
+    return <EmptyState title="No history yet" body="Add or update an asset to start building your history graph." />;
+  }
+
   const first = series[0]?.v ?? window.NET_WORTH;
   const last = series[series.length - 1]?.v ?? window.NET_WORTH;
   const change = last - first;
@@ -507,7 +511,7 @@ function HistoryScreen() {
         <div className="big-num" style={{fontSize: 36}}>Growth over time</div>
       </div>
 
-      <Card eyebrow={`${range === "ALL" ? "All time" : range} performance`} right={<RangeTabs value={range} onChange={setRange} ranges={["1D","1W","1M","1YR","ALL"]}/>}>
+      <Card eyebrow={`${range} performance`} right={<RangeTabs value={range} onChange={setRange} ranges={["1D","1W","1M","3M","1Y","5Y","ALL"]}/>}>
         <div style={{display:"flex", gap:32, marginBottom:16, flexWrap:"wrap"}}>
           <div>
             <div className="eyebrow">Net change</div>
@@ -530,6 +534,7 @@ function HistoryScreen() {
             <div className="num" style={{fontSize: 20, marginTop: 10}}>{formatMoney(last)}</div>
           </div>
         </div>
+
         <LineChart data={series} height={380} positive={changePct >= 0}/>
       </Card>
 
