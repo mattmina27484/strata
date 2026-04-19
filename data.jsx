@@ -3,7 +3,7 @@
 
 const TODAY = new Date();
 
-// -- Historical series generator (kept only as a last-resort fallback) ------
+// -- Historical series generator (fallback only) ------------------------------
 function makeSeries(points, startVal, endVal, vol = 0.015, seed = 1) {
   const out = [];
   let rng = seed || 1;
@@ -23,7 +23,7 @@ function makeSeries(points, startVal, endVal, vol = 0.015, seed = 1) {
   return out;
 }
 
-// -- Categories --------------------------------------------------------------
+// -- Categories ---------------------------------------------------------------
 const CATEGORIES = [
   { id: "stocks",     name: "Stocks & Shares",       color: "var(--cat-stocks)",     live: true  },
   { id: "property",   name: "Real Estate",           color: "var(--cat-property)",   live: "market" },
@@ -39,7 +39,7 @@ const CATEGORIES = [
   { id: "liability",  name: "Liabilities",           color: "var(--cat-liability)",  live: false, negative: true },
 ];
 
-// -- Currencies --------------------------------------------------------------
+// -- Currencies ---------------------------------------------------------------
 const CURRENCIES = {
   AUD: { symbol: "A$", code: "AUD", rate: 1 },
   USD: { symbol: "$",  code: "USD", rate: 0.6712 },
@@ -47,7 +47,7 @@ const CURRENCIES = {
   EUR: { symbol: "€",  code: "EUR", rate: 0.6180 },
 };
 
-// -- Market ticker (static reference display only) ---------------------------
+// -- Market ticker ------------------------------------------------------------
 const TICKER = [
   { sym: "ASX 200", val: "8,412.3", chg: "+0.64%", pos: true },
   { sym: "S&P 500", val: "5,982.1", chg: "+0.21%", pos: true },
@@ -70,12 +70,12 @@ function currentAssetValue(rec) {
     : (rec.manual_value != null ? Number(rec.manual_value) : 0);
 }
 
-// Convert the localStorage asset shape into the legacy shape the UI expects
 function shapeAsset(rec) {
   const value = currentAssetValue(rec);
-  const qtyLabel = rec.qty ? (rec.category === "crypto"
-      ? `${rec.qty} ${rec.sym || ""}`
-      : `${rec.sym ? rec.sym + " • " : ""}${rec.qty} sh`)
+  const qtyLabel = rec.qty
+    ? (rec.category === "crypto"
+        ? `${rec.qty} ${rec.sym || ""}`
+        : `${rec.sym ? rec.sym + " • " : ""}${rec.qty} sh`)
     : rec.sub;
 
   return {
@@ -101,7 +101,7 @@ function buildSpark(assetId, currentValue, snapshots) {
 
   const today = new Date().toISOString().slice(0, 10);
 
-  if (!mine.length) return [{ t: today, v: currentValue }, { t: today, v: currentValue }];
+  if (!mine.length) return [currentValue, currentValue];
 
   const dedup = [];
   for (const p of mine) {
@@ -112,8 +112,7 @@ function buildSpark(assetId, currentValue, snapshots) {
   if (dedup[dedup.length - 1].t !== today) dedup.push({ t: today, v: currentValue });
   else dedup[dedup.length - 1].v = currentValue;
 
-  if (dedup.length === 1) dedup.unshift({ ...dedup[0] });
-  return dedup;
+  return dedup.map(x => x.v);
 }
 
 function isoDay(d) {
@@ -125,8 +124,7 @@ function parseDay(s) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-// Build true daily portfolio history by carrying forward the last known value
-// of each asset until the next snapshot/change.
+// Build true daily portfolio history by carrying forward last known values.
 function buildPortfolioHistory(rawAssets, snapshots) {
   const today = new Date();
   const todayDay = isoDay(today);
@@ -145,19 +143,19 @@ function buildPortfolioHistory(rawAssets, snapshots) {
     for (const day of byDay.keys()) allDays.add(day);
   }
 
-  if (!allDays.size) {
-    return [{ t: todayDay, v: rawAssets.reduce((s, a) => s + currentAssetValue(a), 0) }];
-  }
-
-  const firstDay = [...allDays].sort()[0];
-  const startDate = parseDay(firstDay) || new Date(today);
-  const endDate = new Date(today);
-
   const assetSeries = rawAssets.map(rec => {
     const current = currentAssetValue(rec);
     const byDay = snapsByAsset.get(rec.id) || new Map();
     return { id: rec.id, current, byDay };
   });
+
+  if (!allDays.size) {
+    return [{ t: todayDay, v: Math.round(assetSeries.reduce((s, a) => s + a.current, 0)) }];
+  }
+
+  const firstDay = [...allDays].sort()[0];
+  const startDate = parseDay(firstDay) || new Date(today);
+  const endDate = new Date(today);
 
   const out = [];
   let cursor = new Date(startDate);
@@ -188,11 +186,11 @@ function buildPortfolioHistory(rawAssets, snapshots) {
     cursor.setDate(cursor.getDate() + 1);
   }
 
-  if (!out.length) out.push({ t: todayDay, v: assetSeries.reduce((s, a) => s + a.current, 0) });
+  if (!out.length) {
+    out.push({ t: todayDay, v: Math.round(assetSeries.reduce((s, a) => s + a.current, 0)) });
+  }
 
-  // Always force the final point to match the current live net worth.
   out[out.length - 1].v = Math.round(assetSeries.reduce((s, a) => s + a.current, 0));
-
   return out;
 }
 
@@ -204,7 +202,9 @@ function sliceRange(history, key) {
     "1D": 1,
     "1W": 7,
     "1M": 30,
-    "1YR": 365,
+    "3M": 90,
+    "1Y": 365,
+    "5Y": 365 * 5,
     "ALL": null,
   };
 
@@ -218,7 +218,6 @@ function sliceRange(history, key) {
   let slice = history.filter(p => p.t >= startStr);
   if (!slice.length) slice = [history[0], history[history.length - 1]];
 
-  // Add one point before the window so the graph has the correct starting value
   const before = [...history].reverse().find(p => p.t < slice[0].t);
   if (before) slice = [before, ...slice];
 
@@ -274,7 +273,6 @@ function rebuild() {
     return a;
   });
 
-  // Category totals
   const catMap = {};
   for (const c of CATEGORIES) catMap[c.id] = { ...c, total: 0, count: 0, change24h: 0 };
 
@@ -303,7 +301,9 @@ function rebuild() {
     "1D": sliceRange(PORTFOLIO_HISTORY, "1D"),
     "1W": sliceRange(PORTFOLIO_HISTORY, "1W"),
     "1M": sliceRange(PORTFOLIO_HISTORY, "1M"),
-    "1YR": sliceRange(PORTFOLIO_HISTORY, "1YR"),
+    "3M": sliceRange(PORTFOLIO_HISTORY, "3M"),
+    "1Y": sliceRange(PORTFOLIO_HISTORY, "1Y"),
+    "5Y": sliceRange(PORTFOLIO_HISTORY, "5Y"),
     "ALL": sliceRange(PORTFOLIO_HISTORY, "ALL"),
   };
 
