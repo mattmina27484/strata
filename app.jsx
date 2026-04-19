@@ -186,7 +186,7 @@ function Topbar({ route, setRoute, state, setState }) {
       <div className="topbar-spacer" />
 
       <div className="market-ticker col-hide">
-        {window.TICKER.slice(0, 3).map(t => (
+        {window.TICKER.slice(0, 4).map(t => (
           <span key={t.sym}>
             <span className="sym">{t.sym}</span>
             <span>{t.val}</span>{" "}
