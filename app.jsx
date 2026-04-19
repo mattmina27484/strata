@@ -7,7 +7,6 @@ function useAppState() {
     currency: window.__TWEAKS.currency,
   }));
 
-  // expose state to formatters
   window.__APP_STATE = state;
 
   const setState = React.useCallback((patch) => {
@@ -16,7 +15,6 @@ function useAppState() {
       window.__APP_STATE = next;
       return next;
     });
-    // persist via edit-mode message
     window.parent.postMessage({ type: "__edit_mode_set_keys", edits: patch }, "*");
   }, []);
 
@@ -126,7 +124,7 @@ function UserChip() {
         <span className="avatar">{initials}</span>
       )}
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div className="name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {name}
         </div>
         <div className="meta" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -137,14 +135,18 @@ function UserChip() {
   );
 }
 
-function Topbar({ route, setRoute, state, setState }) {
+function Topbar({ route, state, setState }) {
   const [, tick] = React.useReducer(x => x + 1, 0);
   const [refreshing, setRefreshing] = React.useState(false);
 
   React.useEffect(() => {
     const h = () => tick();
     window.addEventListener("strata:ticker-updated", h);
-    return () => window.removeEventListener("strata:ticker-updated", h);
+    window.addEventListener("strata:data-changed", h);
+    return () => {
+      window.removeEventListener("strata:ticker-updated", h);
+      window.removeEventListener("strata:data-changed", h);
+    };
   }, []);
 
   const crumbsFor = (r) => {
@@ -185,11 +187,22 @@ function Topbar({ route, setRoute, state, setState }) {
 
       <div className="topbar-spacer" />
 
-      <div className="market-ticker col-hide">
-        {window.TICKER.slice(0, 4).map(t => (
-          <span key={t.sym}>
+      <div
+        className="market-ticker col-hide"
+        style={{
+          display: "flex",
+          gap: 18,
+          alignItems: "center",
+          whiteSpace: "nowrap",
+          overflow: "visible",
+          flexShrink: 0,
+          minWidth: "fit-content",
+        }}
+      >
+        {(window.TICKER || []).map(t => (
+          <span key={t.sym} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
             <span className="sym">{t.sym}</span>
-            <span>{t.val}</span>{" "}
+            <span>{t.val}</span>
             <span className={t.pos ? "pos" : "neg"}>{t.chg}</span>
           </span>
         ))}
@@ -202,6 +215,7 @@ function Topbar({ route, setRoute, state, setState }) {
           setRefreshing(true);
           try {
             await window.refreshPrices?.();
+            await window.refreshTicker?.();
           } finally {
             setTimeout(() => setRefreshing(false), 600);
           }
@@ -246,12 +260,21 @@ function App() {
     };
   }, []);
 
-  // Apply theme to root
   React.useEffect(() => {
     document.documentElement.setAttribute("data-theme", state.theme);
   }, [state.theme]);
 
-  // Edit mode
+  React.useEffect(() => {
+    if (!window.refreshTicker) return;
+
+    window.refreshTicker();
+    const i = setInterval(() => {
+      window.refreshTicker();
+    }, 60000);
+
+    return () => clearInterval(i);
+  }, []);
+
   const [editMode, setEditMode] = React.useState(false);
   React.useEffect(() => {
     const onMsg = (e) => {
@@ -388,7 +411,7 @@ Please explain:
     <div className="app">
       <Sidebar route={route} setRoute={setRoute} />
       <main className="main">
-        <Topbar route={route} setRoute={setRoute} state={state} setState={setState} />
+        <Topbar route={route} state={state} setState={setState} />
         <div className="page">
           {renderScreen()}
         </div>
