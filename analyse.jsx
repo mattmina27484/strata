@@ -38,6 +38,7 @@ function AnalysePanel({ onClose }) {
 
   async function run() {
     setState("loading"); setError("");
+    const profileCtx = (window.profileSummary && window.profileSummary()) || "";
     const prompt = `You are a thoughtful, conservative financial analyst. Review this person's portfolio and produce a JSON-only response (no markdown, no prose before/after) with this exact shape:
 
 {
@@ -52,7 +53,10 @@ function AnalysePanel({ onClose }) {
 
 Portfolio data (currency: ${portfolio.currency}):
 ${JSON.stringify(portfolio, null, 2)}
-
+${profileCtx ? `
+About the person (use this to personalise observations, risks, and suggestions — reference age, dependents, income, goals, risk tolerance where relevant):
+${profileCtx}
+` : ""}
 Rules:
 - Be specific — reference actual category names, percentages, and amounts from the data.
 - Don't recommend specific ticker symbols; stay at asset-class level.
@@ -95,8 +99,9 @@ Rules:
       } else if (window.claude?.complete) {
         raw = await window.claude.complete(prompt);
       } else {
-        throw new Error("No AI endpoint configured. Set window.STRATA_AI_ENDPOINT or window.ANTHROPIC_API_KEY in index.html.");
+        throw new Error("No AI endpoint configured. Set window.STRATA_AI_ENDPOINT (Worker URL) or window.ANTHROPIC_API_KEY in index.html — see DEPLOY.md.");
       }
+
       const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
       const parsed = JSON.parse(cleaned);
       setData(parsed);
@@ -147,12 +152,7 @@ Rules:
               <button className="btn" style={{marginTop: 14}} onClick={run}>Try again</button>
             </div>
           )}
-          {state === "ok" && data && <AnalyseContent data={data} onSave={() => {
-            if (!window.saveAnalysisToStrategyPlan) return;
-            window.saveAnalysisToStrategyPlan(data);
-            window.__APP_NAVIGATE?.({ id: "strategy" });
-            onClose();
-          }}/>}
+          {state === "ok" && data && <AnalyseContent data={data}/>}
         </div>
       </div>
     </div>
@@ -190,11 +190,10 @@ function LoadingPulse() {
   );
 }
 
-function AnalyseContent({ data, onSave }) {
+function AnalyseContent({ data }) {
   const score = Math.max(0, Math.min(10, Number(data.score) || 0));
   return (
     <div style={{display:"flex", flexDirection:"column", gap: 22}}>
-      {/* Score + headline */}
       <div style={{display: "grid", gridTemplateColumns: "auto 1fr", gap: 22, alignItems: "center"}}>
         <ScoreRing value={score}/>
         <div>
@@ -203,7 +202,6 @@ function AnalyseContent({ data, onSave }) {
         </div>
       </div>
 
-      {/* Observations */}
       {Array.isArray(data.observations) && data.observations.length > 0 && (
         <Section title="What I notice">
           <ul style={{margin: 0, paddingLeft: 18, color: "var(--ink-2)", fontSize: 14, lineHeight: 1.65}}>
@@ -212,7 +210,6 @@ function AnalyseContent({ data, onSave }) {
         </Section>
       )}
 
-      {/* Risks */}
       {Array.isArray(data.risks) && data.risks.length > 0 && (
         <Section title="Risks to consider">
           <div style={{display:"flex", flexDirection:"column", gap: 10}}>
@@ -232,7 +229,6 @@ function AnalyseContent({ data, onSave }) {
         </Section>
       )}
 
-      {/* Suggestions */}
       {Array.isArray(data.suggestions) && data.suggestions.length > 0 && (
         <Section title="Suggestions">
           <div style={{display:"flex", flexDirection:"column", gap: 10}}>
@@ -266,13 +262,6 @@ function AnalyseContent({ data, onSave }) {
         </Section>
       )}
 
-      {Array.isArray(data.suggestions) && data.suggestions.length > 0 && window.saveAnalysisToStrategyPlan && (
-        <div style={{display:"flex", justifyContent:"flex-end"}}>
-          <button className="btn primary" onClick={onSave}>Save to goals & strategy</button>
-        </div>
-      )}
-
-      {/* Disclaimer */}
       <div style={{fontSize: 11, color: "var(--ink-4)", borderTop: "1px solid var(--line)", paddingTop: 14, lineHeight: 1.6}}>
         {data.disclaimer || "This analysis is for informational purposes only and is not financial advice. Consult a licensed advisor for personal decisions."}
       </div>
